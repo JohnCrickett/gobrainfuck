@@ -14,11 +14,21 @@ func TestCompile(t *testing.T) {
 		"Cat": {
 			in: ",[.,]",
 			expected: []Instruction{
-				Instruction{OpRead, 0},
+				Instruction{OpRead, 1},
 				Instruction{OpJumpForward, 4},
-				Instruction{OpWrite, 0},
-				Instruction{OpRead, 0},
-				Instruction{OpJumpBackward, 1}},
+				Instruction{OpWrite, 1},
+				Instruction{OpRead, 1},
+				Instruction{OpJumpBackward, 1},
+			},
+		},
+		"Optimisation": {
+			in: ">>>>>+>+++",
+			expected: []Instruction{
+				Instruction{OpIncrementDp, 5},
+				Instruction{OpIncrement, 1},
+				Instruction{OpIncrementDp, 1},
+				Instruction{OpIncrement, 3},
+			},
 		},
 	}
 
@@ -60,9 +70,8 @@ func TestExecute(t *testing.T) {
 	}{
 		"Add and print": {
 			in: []Instruction{
-				Instruction{OpIncrement, 0},
-				Instruction{OpIncrement, 0},
-				Instruction{OpWrite, 0},
+				Instruction{OpIncrement, 2},
+				Instruction{OpWrite, 1},
 			},
 			expected: bytes.NewBuffer([]byte{2}),
 		},

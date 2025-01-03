@@ -8,10 +8,10 @@ import (
 	"os"
 )
 
-const defaultCellCount int = 30000
+const defaultCellCount uint = 30000
 
 func main() {
-	numCells := flag.Int("cells", defaultCellCount, "Number of cells to use")
+	numCells := flag.Uint("cells", defaultCellCount, "Number of cells to use")
 	flag.Parse()
 	sourceFiles := flag.Args()
 
@@ -38,7 +38,7 @@ func main() {
 	}
 }
 
-func repl(numCells int) {
+func repl(numCells uint) {
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("BF> ")
@@ -81,25 +81,14 @@ func compile(source string) ([]Instruction, error) {
 	bytecode := make([]Instruction, 0)
 	var jmpPositions = make([]uint16, 0)
 	var pos uint16
+	programSize := len(source)
 
-	for i, cmd := range source {
-		switch cmd {
-		case '>':
-			bytecode = append(bytecode, Instruction{OpIncrementDp, 0})
-		case '<':
-			bytecode = append(bytecode, Instruction{OpDecrementDp, 0})
-		case '+':
-			bytecode = append(bytecode, Instruction{OpIncrement, 0})
-		case '-':
-			bytecode = append(bytecode, Instruction{OpDecrement, 0})
-		case '.':
-			bytecode = append(bytecode, Instruction{OpWrite, 0})
-		case ',':
-			bytecode = append(bytecode, Instruction{OpRead, 0})
-		case '[':
+	for i := 0; i < programSize; i++ {
+		cmd := source[i]
+		if cmd == '[' {
 			bytecode = append(bytecode, Instruction{OpJumpForward, 0})
 			jmpPositions = append(jmpPositions, pos)
-		case ']':
+		} else if cmd == ']' {
 			if len(jmpPositions) == 0 {
 				return nil, fmt.Errorf("Unmatched jump back at position %d", i)
 			}
@@ -107,9 +96,29 @@ func compile(source string) ([]Instruction, error) {
 			jmpPositions = jmpPositions[:len(jmpPositions)-1]
 			bytecode = append(bytecode, Instruction{OpJumpBackward, jmpTarget})
 			bytecode[jmpTarget].operand = pos
-
-		default:
-			pos-- // don't increment (negate) position for non-instructions
+		} else {
+			cmdPos := i
+			for i < programSize && cmd == source[i] {
+				i++
+			}
+			count := uint16(i - cmdPos)
+			i-- // don't consume mismatching instruction
+			switch cmd {
+			case '>':
+				bytecode = append(bytecode, Instruction{OpIncrementDp, count})
+			case '<':
+				bytecode = append(bytecode, Instruction{OpDecrementDp, count})
+			case '+':
+				bytecode = append(bytecode, Instruction{OpIncrement, count})
+			case '-':
+				bytecode = append(bytecode, Instruction{OpDecrement, count})
+			case '.':
+				bytecode = append(bytecode, Instruction{OpWrite, count})
+			case ',':
+				bytecode = append(bytecode, Instruction{OpRead, count})
+			default:
+				pos-- // don't increment (negate) position for non-instructions
+			}
 		}
 		pos++ // increment position
 	}
@@ -121,32 +130,36 @@ func compile(source string) ([]Instruction, error) {
 	return bytecode, nil
 }
 
-func execute(bytecode []Instruction, numCells int, in io.Reader, out io.Writer) {
+func execute(bytecode []Instruction, numCells uint, in io.Reader, out io.Writer) {
 	cells := make([]uint8, numCells)
-	dp := 0
+	var dp uint
 	reader := bufio.NewReader(in)
 
 	for pc := 0; pc < len(bytecode); pc++ {
 		switch bytecode[pc].op {
 		case OpIncrementDp:
-			dp++
+			dp += uint(bytecode[pc].operand)
 			if dp >= numCells {
 				panic("Access violation, dp out of bounds")
 			}
 		case OpDecrementDp:
-			dp--
+			dp -= uint(bytecode[pc].operand)
 			if dp < 0 {
 				panic("Access violation, dp out of bounds")
 			}
 		case OpIncrement:
-			cells[dp]++
+			cells[dp] += uint8(bytecode[pc].operand)
 		case OpDecrement:
-			cells[dp]--
+			cells[dp] -= uint8(bytecode[pc].operand)
 		case OpWrite:
-			fmt.Fprintf(out, "%c", cells[dp])
+			for r := 0; r < int(bytecode[pc].operand); r++ {
+				fmt.Fprintf(out, "%c", cells[dp])
+			}
 		case OpRead:
-			v, _ := reader.ReadByte()
-			cells[dp] = v
+			for r := 0; r < int(bytecode[pc].operand); r++ {
+				v, _ := reader.ReadByte()
+				cells[dp] = v
+			}
 		case OpJumpForward:
 			if cells[dp] == 0 {
 				pc = int(bytecode[pc].operand)
