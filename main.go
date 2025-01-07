@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 )
 
 const defaultCellCount uint = 30000
+const Profile = false
 
 func main() {
 	numCells := flag.Uint("cells", defaultCellCount, "Number of cells to use")
@@ -33,6 +35,7 @@ func main() {
 			fmt.Fprint(os.Stderr, err)
 			os.Exit(1)
 		} else {
+			//dumpSrc(bytecode)
 			execute(bytecode, *numCells, os.Stdin, os.Stdout)
 		}
 	}
@@ -41,7 +44,7 @@ func main() {
 func repl(numCells uint) {
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print("BF> ")
+		fmt.Print("CCBF> ")
 		scanned := scanner.Scan()
 		if !scanned {
 			return
@@ -75,6 +78,11 @@ const (
 	OpRead
 	OpJumpForward
 	OpJumpBackward
+	OpZero
+	OpLoopMoveDpLeft
+	OpLoopMoveDpRight
+	OpLoopMoveValLeft
+	OpLoopMoveValRight
 )
 
 func compile(source string) ([]Instruction, error) {
@@ -92,10 +100,50 @@ func compile(source string) ([]Instruction, error) {
 			if len(jmpPositions) == 0 {
 				return nil, fmt.Errorf("Unmatched jump back at position %d", i)
 			}
-			jmpTarget := jmpPositions[len(jmpPositions)-1]
+			loopStart := jmpPositions[len(jmpPositions)-1]
 			jmpPositions = jmpPositions[:len(jmpPositions)-1]
-			bytecode = append(bytecode, Instruction{OpJumpBackward, jmpTarget})
-			bytecode[jmpTarget].operand = pos
+
+			// detect if a loop that can be optimised
+			loopSize := pos - loopStart
+
+			if loopSize == 2 && bytecode[pos-1].op == OpDecrement { // [-]
+				bytecode = bytecode[:len(bytecode)-2]
+				pos -= 2
+				bytecode = append(bytecode, Instruction{OpZero, 0})
+			} else if loopSize == 2 && bytecode[pos-1].op == OpIncrementDp {
+				repeats := bytecode[pos-1].operand
+				bytecode = bytecode[:len(bytecode)-2]
+				pos -= 2
+				bytecode = append(bytecode, Instruction{OpLoopMoveDpRight, repeats})
+			} else if loopSize == 2 && bytecode[pos-1].op == OpIncrementDp {
+				repeats := bytecode[pos-1].operand
+				bytecode = bytecode[:len(bytecode)-2]
+				pos -= 2
+				bytecode = append(bytecode, Instruction{OpLoopMoveDpLeft, repeats})
+			} else if loopSize == 5 &&
+				bytecode[loopStart+1].op == OpDecrement && bytecode[loopStart+1].operand == 1 &&
+				bytecode[loopStart+3].op == OpIncrement && bytecode[loopStart+3].operand == 1 &&
+				bytecode[loopStart+2].op == OpDecrementDp && bytecode[loopStart+4].op == OpIncrementDp &&
+				bytecode[loopStart+2].operand == bytecode[loopStart+4].operand {
+				// handle [-{1}<{n}+{1}>{n}]
+				n := bytecode[loopStart+2].operand
+				bytecode = bytecode[:len(bytecode)-5]
+				pos -= 5
+				bytecode = append(bytecode, Instruction{OpLoopMoveValLeft, n})
+			} else if loopSize == 5 &&
+				bytecode[loopStart+1].op == OpDecrement && bytecode[loopStart+1].operand == 1 &&
+				bytecode[loopStart+3].op == OpIncrement && bytecode[loopStart+3].operand == 1 &&
+				bytecode[loopStart+2].op == OpIncrementDp && bytecode[loopStart+4].op == OpDecrementDp &&
+				bytecode[loopStart+2].operand == bytecode[loopStart+4].operand {
+				// handle [-{1}>{n}+{1}<{n}]
+				n := bytecode[loopStart+2].operand
+				bytecode = bytecode[:len(bytecode)-5]
+				pos -= 5
+				bytecode = append(bytecode, Instruction{OpLoopMoveValRight, n})
+			} else {
+				bytecode = append(bytecode, Instruction{OpJumpBackward, loopStart})
+				bytecode[loopStart].operand = pos
+			}
 		} else {
 			cmdPos := i
 			for i < programSize && cmd == source[i] {
@@ -135,6 +183,8 @@ func execute(bytecode []Instruction, numCells uint, in io.Reader, out io.Writer)
 	var dp uint
 	reader := bufio.NewReader(in)
 
+	loops := make(map[string]int)
+
 	for pc := 0; pc < len(bytecode); pc++ {
 		switch bytecode[pc].op {
 		case OpIncrementDp:
@@ -161,15 +211,79 @@ func execute(bytecode []Instruction, numCells uint, in io.Reader, out io.Writer)
 				cells[dp] = v
 			}
 		case OpJumpForward:
+			start := pc
 			if cells[dp] == 0 {
 				pc = int(bytecode[pc].operand)
+				if Profile {
+					loop := loopSource(bytecode, uint16(start), uint16(pc))
+					loops[loop] += 1
+				}
 			}
 		case OpJumpBackward:
 			if cells[dp] > 0 {
 				pc = int(bytecode[pc].operand)
 			}
+		case OpZero:
+			cells[dp] = 0
+		case OpLoopMoveDpRight:
+			for cells[dp] != 0 {
+				dp += uint(bytecode[pc].operand)
+			}
+		case OpLoopMoveDpLeft:
+			for cells[dp] != 0 {
+				dp -= uint(bytecode[pc].operand)
+			}
+		case OpLoopMoveValLeft:
+			if cells[dp] != 0 {
+				cells[dp-uint(bytecode[pc].operand)] += cells[dp]
+				cells[dp] = 0
+			}
+		case OpLoopMoveValRight:
+			if cells[dp] != 0 {
+				cells[dp+uint(bytecode[pc].operand)] += cells[dp]
+				cells[dp] = 0
+			}
 		default:
 			panic(fmt.Sprintf("Unrecognized op %d", bytecode[pc].op))
 		}
 	}
+
+	if Profile {
+		keys := make([]string, 0, len(loops))
+		for key := range loops {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return loops[keys[i]] > loops[keys[j]] })
+
+		for i, key := range keys {
+			fmt.Printf("%s, %d\n", key, loops[key])
+			if i > 10 {
+				return
+			}
+		}
+	}
+
+}
+
+func loopSource(bytecode []Instruction, start uint16, end uint16) string {
+	ops := make(map[uint8]rune)
+	ops[OpIncrementDp] = '>'
+	ops[OpDecrementDp] = '<'
+	ops[OpIncrement] = '+'
+	ops[OpDecrement] = '-'
+	ops[OpWrite] = '.'
+	ops[OpRead] = ','
+	ops[OpJumpForward] = '['
+	ops[OpJumpBackward] = ']'
+
+	var loop string
+
+	for i := start; i <= end; i++ {
+		if bytecode[i].op == OpJumpForward || bytecode[i].op == OpJumpBackward {
+			loop += fmt.Sprintf("%c", ops[bytecode[i].op])
+		} else {
+			loop += fmt.Sprintf("%c{%d}", ops[bytecode[i].op], bytecode[i].operand)
+		}
+	}
+	return loop
 }

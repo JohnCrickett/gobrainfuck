@@ -30,6 +30,50 @@ func TestCompile(t *testing.T) {
 				Instruction{OpIncrement, 3},
 			},
 		},
+		"Optimisation of Loops - Zero Cell": {
+			in: "[-]",
+			expected: []Instruction{
+				Instruction{OpZero, 0},
+			},
+		},
+		"Optimisation of Loops - Zero Cell, Surrounding Code": {
+			in: "++[-]++>+<-<",
+			expected: []Instruction{
+				Instruction{OpIncrement, 2},
+				Instruction{OpZero, 0},
+				Instruction{OpIncrement, 2},
+				Instruction{OpIncrementDp, 1},
+				Instruction{OpIncrement, 1},
+				Instruction{OpDecrementDp, 1},
+				Instruction{OpDecrement, 1},
+				Instruction{OpDecrementDp, 1},
+			},
+		},
+		"Optimisation of Loops - Move Dp": {
+			in: "++[>>>]--",
+			expected: []Instruction{
+				Instruction{OpIncrement, 2},
+				Instruction{OpLoopMoveDpRight, 3},
+				Instruction{OpDecrement, 2},
+			},
+		},
+		"Optimisation of Loops - Move Data Left": {
+			in: ">>>>++[-<<<+>>>]",
+			expected: []Instruction{
+				Instruction{OpIncrementDp, 4},
+				Instruction{OpIncrement, 2},
+				Instruction{OpLoopMoveValLeft, 3},
+			},
+		},
+		"Optimisation of Loops - Move Data Right": {
+			in: ">>>>>++[->>>>+<<<<]--",
+			expected: []Instruction{
+				Instruction{OpIncrementDp, 5},
+				Instruction{OpIncrement, 2},
+				Instruction{OpLoopMoveValRight, 4},
+				Instruction{OpDecrement, 2},
+			},
+		},
 	}
 
 	for name, test := range tests {
@@ -74,6 +118,54 @@ func TestExecute(t *testing.T) {
 				Instruction{OpWrite, 1},
 			},
 			expected: bytes.NewBuffer([]byte{2}),
+		},
+		"Zero": {
+			in: []Instruction{
+				Instruction{OpIncrement, 2},
+				Instruction{OpWrite, 1},
+				Instruction{OpZero, 0},
+				Instruction{OpWrite, 1},
+			},
+			expected: bytes.NewBuffer([]byte{2, 0}),
+		},
+		"Move Data": {
+			in: []Instruction{
+				Instruction{OpIncrementDp, 2},
+				Instruction{OpIncrement, 2},
+				Instruction{OpWrite, 1},
+				Instruction{OpLoopMoveValLeft, 2},
+				Instruction{OpDecrementDp, 2},
+				Instruction{OpWrite, 1},
+			},
+			expected: bytes.NewBuffer([]byte{2, 2}),
+		},
+		"Move Data Pointer Right": {
+			in: []Instruction{
+				Instruction{OpIncrementDp, 6},
+				Instruction{OpIncrement, 1},
+				Instruction{OpWrite, 1},
+				Instruction{OpDecrementDp, 6},
+				Instruction{OpWrite, 1},
+				Instruction{OpLoopMoveDpRight, 2},
+				Instruction{OpWrite, 1},
+			},
+			expected: bytes.NewBuffer([]byte{1, 0, 1}),
+		},
+		"Move Data Pointer Left": {
+			in: []Instruction{
+				Instruction{OpIncrement, 1},
+				Instruction{OpWrite, 1},
+				Instruction{OpIncrementDp, 7},
+				Instruction{OpIncrement, 1},
+				Instruction{OpWrite, 1},
+				Instruction{OpIncrementDp, 1},
+				Instruction{OpLoopMoveDpLeft, 2},
+				Instruction{OpIncrementDp, 1},
+				Instruction{OpWrite, 1},
+				Instruction{OpLoopMoveDpRight, 2},
+				Instruction{OpWrite, 1},
+			},
+			expected: bytes.NewBuffer([]byte{1, 1, 0, 1}),
 		},
 	}
 
