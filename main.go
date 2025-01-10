@@ -262,7 +262,6 @@ func execute(bytecode []Instruction, numCells uint, in io.Reader, out io.Writer)
 			}
 		}
 	}
-
 }
 
 func loopSource(bytecode []Instruction, start uint16, end uint16) string {
